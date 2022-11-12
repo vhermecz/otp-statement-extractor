@@ -1,0 +1,5 @@
+#!/bin/bash
+DIR="$(dirname "$(realpath "$0")")"
+echo $DIR
+DOCKER_BUILDKIT=0 docker build -t otp_extractor $DIR
+docker run -it --rm -v /$(pwd):/app --user="$(id --user):$(id --group)" --name otp_extractor otp_extractor python3 otp_extractor.py "$@"
