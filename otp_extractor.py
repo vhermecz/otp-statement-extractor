@@ -86,12 +86,14 @@ def extract_seq_records(seq):
             result[1:2] = []  # always empty
             yield result
 
-def extract_records(reader):
+def extract_records(reader, meta=None):
     acc_no = None
     currencies = {}
     for seq in extract_text_seqs(reader):
         acc_info = extract_account_number_info(seq)
         if acc_info:
+            if meta and acc_info.account_number not in map(lambda x:x.account_number, meta.accounts):
+                meta.accounts.append(acc_info)
             acc_no = acc_info.account_number
             if acc_info.currency:
                 currencies[acc_no] = acc_info.currency
@@ -100,24 +102,28 @@ def extract_records(reader):
             for record in extract_seq_records(seq):
                 yield prefix + record
 
-Meta = collections.namedtuple('Meta', ['term'])
+LANG_LUT = {"TERM": "EN", "IDÕSZAK": "HU"}
+Meta = collections.namedtuple('Meta', ['term', 'lang', 'accounts'])
 def extract_meta(reader):
+    last = None
     term = None
+    lang = None
     # TODO owner
     for op in operation_iterator(reader):
         if op[1] == b'Tj' and len(op[0]) == 1:
             text = op[0][0]
             if is_tx_date_range(text):
                 term = text
-    return Meta(term)
+                last = last.strip("€: ")
+                lang = LANG_LUT.get(last, "??")
+            last = text
+    return Meta(term, lang, [])
 
 Content = collections.namedtuple('Content', ['meta', 'records'])
 def extract(fname):
     reader = PdfReader(fname)
     meta = extract_meta(reader)
-    records = list(extract_records(reader))
-    if not records:
-        return None
+    records = list(extract_records(reader, meta)) or []
     return Content(meta, records)
 
 def main():
@@ -127,6 +133,7 @@ def main():
     )
     parser.add_argument('source')
     parser.add_argument('-o', '--out')
+    parser.add_argument('--debug', action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args()
     fp = sys.stdout
     if args.out:
@@ -136,10 +143,19 @@ def main():
         source = os.path.join(source, "**", "*.pdf")
     cout = csv.writer(fp)
     for fname in glob.glob(source, recursive=True):
-        res = extract(fname)
-        if res:
-            for record in res.records:
-                cout.writerow([res.meta.term] + record)
+        if args.debug:
+            reader = PdfReader(fname)
+            with open(fname + ".stream", "w") as fp2:
+                for op in operation_iterator(reader):
+                    fp2.write(str(op))
+                    fp2.write("\n")
+        else:
+            res = extract(fname)
+            if res and res.meta.lang == 'HU':
+                # for acc in res.meta.accounts:
+                #     print([res.meta.term, res.meta.lang, acc.account_number, fname])            
+                for record in res.records:
+                    cout.writerow([res.meta.term] + record)
     fp.flush()
     if args.out:
         fp.close()
